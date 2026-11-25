@@ -155,7 +155,47 @@ X-XSS-Protection: 1; mode=block
 
 ## Part 3: Cloud Deployment
 
-*(Đang hoàn thiện ở CP6)*
+### Exercise 3.1: Deploy Agent Part 6 lên Railway
+
+* **Platform:** Railway (`06-lab-complete/` kết nối với service `Redis` trên Railway)
+* **Public URL:** https://prolific-unity-production-0b2b91ea.up.railway.app
+* **Screenshots:**
+  * [screenshots/dashboard.png](screenshots/dashboard.png)
+  * [screenshots/running.png](screenshots/running.png)
+  * [screenshots/test.png](screenshots/test.png)
+
+**Kết quả 4 lệnh tự kiểm tra CP6 (chạy từ WSL2 tới URL public, không lộ key):**
+
+```text
+$ curl -sS -o /dev/null -w '%{http_code}\n' "$BASE/health"
+200
+
+$ curl -sS -o /dev/null -w '%{http_code}\n' "$BASE/ready"
+200
+
+$ curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$BASE/ask" -H 'Content-Type: application/json' -d '{"question":"Hello"}'
+401
+
+$ curl -sS -o /dev/null -w '%{http_code}\n' -X POST "$BASE/ask" -H 'Content-Type: application/json' -H "X-API-Key: $AGENT_API_KEY" -d '{"question":"Hello"}'
+200
+```
+
+### Exercise 3.2: So sánh `06-lab-complete/railway.toml` và `06-lab-complete/render.yaml`
+
+| Tiêu chí | `railway.toml` | `render.yaml` | Vì sao khác nhau? |
+| --- | --- | --- | --- |
+| **Định dạng & phạm vi** | TOML (`[build]`, `[deploy]`), cấu hình cho **1 service** hiện tại | YAML (`services:`), là **Blueprint IaC** có thể khai báo cả danh sách nhiều service (web, worker, database) | Railway quản lý tài nguyên (như Redis) trong Project Canvas/CLI rồi nối qua Variable Reference; Render cho phép mô tả toàn bộ stack trong một Blueprint file |
+| **Cách build** | `builder = "DOCKERFILE"`, `dockerfilePath = "Dockerfile"` | `runtime: docker`, `dockerfilePath: ./Dockerfile` | Cả hai đều trỏ tới cùng `Dockerfile` multi-stage của agent nhưng theo schema riêng của từng nền tảng |
+| **Health check & restart** | `healthcheckPath = "/health"`, `healthcheckTimeout = 30`, `restartPolicyType = "ON_FAILURE"` | `healthCheckPath: /health` | Railway dùng camelCase chữ thường `healthcheckPath` và cho chỉnh timeout/restart policy trực tiếp trong TOML; Render dùng `healthCheckPath` |
+| **Biến môi trường & secrets** | Không cần liệt kê trong `railway.toml`; đặt qua Railway Dashboard (`Variables`) hoặc `railway variables set` | Khai báo trực tiếp trong `envVars:` với `generateValue: true` (tự sinh secret như `AGENT_API_KEY`) hoặc `sync: false` (nhập tay trên UI khi deploy, như `REDIS_URL`) | Giúp Render tạo Blueprint từ repo public mà không phải hardcode bất kỳ secret nào vào Git |
+
+### Exercise 3.3: Pipeline CI/CD trên GCP Cloud Run (`03-cloud-deployment/production-cloud-run/`)
+
+Đọc `cloudbuild.yaml` và `service.yaml`, pipeline CI/CD tự động hóa 4 bước từ lúc push code lên nhánh `main`:
+1. **`test`:** Dùng container `python:3.11-slim` cài dependencies và chạy `pytest tests/ -v`; nếu test fail pipeline dừng ngay.
+2. **`build`:** Chờ `test` xong rồi build Docker image gắn hai tag (`$COMMIT_SHA` để rollback chính xác và `latest` để tận dụng layer cache `--cache-from`).
+3. **`push`:** Đẩy image với các tag vừa build lên Google Container Registry (`gcr.io/$PROJECT_ID/ai-agent`).
+4. **`deploy`:** Chạy `gcloud run deploy` triển khai image `$COMMIT_SHA` lên Cloud Run vùng `asia-southeast1` (`--min-instances=1` tránh cold start, `--max-instances=10`, `512Mi` RAM, 1 CPU, nạp secret từ GCP Secret Manager). Ngoài ra `service.yaml` định nghĩa cấu hình Knative dưới dạng IaC (concurrency `80`, timeout `60s`, secret refs từ Secret Manager, `livenessProbe` gọi `/health` và `startupProbe` gọi `/ready`).
 
 ---
 
@@ -313,3 +353,5 @@ Total messages: 10
 * **CP3 — API Security:** Hỏi AI cách chạy và test bản `develop` (API key) và bản `production` (`/auth/token` cho `student`/`demo123`, vòng lặp `curl -i` kiểm tra `429`). Tôi tự chạy server, thu được output `401`, `200` (10 lần đầu) và `429` (`Retry-After: 57` ở request 11–12), đọc đối chiếu `auth.py`, `rate_limiter.py`, `cost_guard.py` để viết phần giải thích và che token trước khi lưu.
 * **CP4 — Scaling & Reliability:** Hỏi AI lệnh chạy stack 3 instance với `-p k5-day14-scaling` và kiểm tra stateless. Tôi tự chạy `docker compose up --scale agent=3` và `python test_stateless.py`, xác nhận 5 request đi qua cả 3 instance mà vẫn giữ nguyên 10 message history trong Redis, đối chiếu code `05-scaling-reliability/develop/app.py` để giải thích `/health` vs `/ready` và graceful shutdown.
 * **CP5 — Part 6 Final Project (`06-lab-complete/`):** Hỏi AI cách hoàn thiện các module TODO trong `06-lab-complete/app/` (`config.py`, `redis_client.py`, `auth.py`, `rate_limiter.py`, `cost_guard.py`, `main.py`) cùng `Dockerfile` multi-stage, `docker-compose.yml`, `.dockerignore`, `.env.example`, `railway.toml` và `render.yaml`. Tôi đã đọc hiểu các file code, tự cài dependencies và chạy `python check_production_ready.py` trong WSL2, đạt `PASS 12/12` (`43/43 checks passed`, image `56 MB`, `docker stop` `1.2s`).
+* **CP6 — Part 3 Cloud Deployment:** Hỏi AI cách xử lý lỗi tên service quá dài trên Railway (tạo Empty Service rồi Connect Repo với Root Directory `/06-lab-complete`), cách nối `REDIS_URL` sang service `prolific-unity` và sửa lỗi `502` do lệch Target Port (`8000` vs `PORT=8080` của Railway). Sau khi chỉnh Port `8080`, tôi tự chạy 4 lệnh `curl` tới URL public và xác nhận kết quả `200`, `200`, `401`, `200`; đối chiếu `railway.toml`, `render.yaml`, `cloudbuild.yaml`, `service.yaml` để hoàn thiện Part 3 và `DEPLOYMENT.md`.
+* **CP7 & CP8 — Part 7 Benchmark & Observability:** Hỏi AI hướng dẫn chạy load test (`load_test.py` ở 4 mức concurrency và 3 mức `MOCK_SLOW_RATE`), eval (`run_eval.py`), sửa `KNOWLEDGE_BASE` trong `develop/utils/mock_llm.py` (và đồng bộ sang `production/utils/mock_llm.py`), sửa lỗi `Dockerfile` của `benchmark-observability/production/` (chuyển cài đặt thư viện sang `/usr/local` để user `agent` tìm thấy `uvicorn`), và chạy Locust headless (`scale_1`, `scale_3`), Grafana, Jaeger, Prometheus Alerts. Toàn bộ số liệu trong `BENCHMARK_REPORT.md` đều lấy trực tiếp từ 10 file JSON trong `reports/`, 2 file CSV trong `benchmark-results/` và các ảnh tự chụp trong `screenshots/`.
